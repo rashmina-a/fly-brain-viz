@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Fly Brain Explorer — MaleCNS v1.0</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0b0e14;
+    --panel: #131824;
+    --panel2: #1a2130;
+    --text: #d7dee9;
+    --dim: #8b95a7;
+    --accent: #4fc3f7;
+    --fire: #ff7043;
+    --border: #232c3f;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 13px/1.45 "Segoe UI", system-ui, sans-serif; overflow: hidden; }
+  #app { display: flex; height: 100vh; position: relative; }
+  #panel { width: 300px; min-width: 300px; background: var(--panel);
+    border-right: 1px solid var(--border); display: flex; flex-direction: column; }
+  #panel h1 { font-size: 15px; margin: 0; padding: 12px 14px 2px; letter-spacing: .4px; }
+  #panel .sub { color: var(--dim); font-size: 11px; padding: 0 14px 10px;
+    border-bottom: 1px solid var(--border); }
+  .sec { padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  .sec h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .8px;
+    color: var(--dim); margin: 0 0 8px; }
+  .row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+  .row:last-child { margin-bottom: 0; }
+  input[type=text], input[type=search] { flex: 1; background: var(--panel2);
+    border: 1px solid var(--border); color: var(--text); border-radius: 4px;
+    padding: 6px 8px; font-size: 13px; outline: none; }
+  input[type=text]:focus, input[type=search]:focus { border-color: var(--accent); }
+  input[type=range] { flex: 1; accent-color: var(--accent); }
+  button { background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 6px 10px; cursor: pointer; font-size: 12px; }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button.primary { background: #14324a; border-color: #1f5f86; }
+  button.primary:hover { background: #17405e; }
+  button.active { background: #3a2416; border-color: var(--fire); color: var(--fire); }
+  select { background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 4px; padding: 5px 6px; font-size: 12px; max-width: 100%; }
+  label.chk { display: flex; align-items: center; gap: 6px; font-size: 12px;
+    color: var(--dim); cursor: pointer; margin-bottom: 4px; }
+  label.chk input { accent-color: var(--accent); }
+  .hint { color: var(--dim); font-size: 11px; }
+  .val { color: var(--accent); font-size: 11px; min-width: 34px; text-align: right; }
+  #results { overflow-y: auto; max-height: 220px; border: 1px solid var(--border);
+    border-radius: 4px; margin-top: 6px; }
+  .res { padding: 5px 8px; cursor: pointer; border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between; gap: 6px; }
+  .res:hover { background: var(--panel2); }
+  .res .nm { color: var(--accent); }
+  .res .cls { color: var(--dim); font-size: 11px; }
+  #viewport { flex: 1; position: relative; min-width: 120px; overflow: hidden; }
+  /* narrow windows: info panel overlays the 3D view instead of squeezing it */
+  @media (max-width: 1050px) {
+    #panel { width: 246px; min-width: 246px; }
+    #info { position: absolute; right: 0; top: 0; bottom: 0; z-index: 6;
+      box-shadow: -6px 0 18px rgba(0,0,0,.55); display: none; }
+    body.has-sel #info { display: block; }
+    #viewport { min-width: 140px; }
+  }
+  #canvas3d { position: absolute; inset: 0; display: block; }
+  #hud { position: absolute; top: 10px; left: 10px; background: rgba(19,24,36,.85);
+    border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px;
+    font-size: 12px; pointer-events: none; }
+  #hud b { color: var(--accent); }
+  #legend { position: absolute; bottom: 10px; left: 10px; background: rgba(19,24,36,.85);
+    border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; font-size: 11px;
+    color: var(--dim); }
+  .lg { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; }
+  #info { width: 280px; min-width: 280px; background: var(--panel);
+    border-left: 1px solid var(--border); overflow-y: auto; padding: 12px 14px; }
+  #info h3 { margin: 0 0 2px; font-size: 14px; color: var(--accent); }
+  #info .typ { color: var(--dim); font-size: 11px; margin-bottom: 8px; }
+  #info table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  #info td { padding: 3px 0; border-bottom: 1px solid var(--border); }
+  #info td:first-child { color: var(--dim); }
+  #info td:last-child { text-align: right; }
+  .tag { display: inline-block; background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 3px; padding: 1px 6px; font-size: 11px; margin: 2px 2px 0 0; cursor: pointer; }
+  .tag:hover { border-color: var(--accent); color: var(--accent); }
+  .conn { display: flex; justify-content: space-between; padding: 3px 0;
+    border-bottom: 1px solid var(--border); font-size: 12px; cursor: pointer; }
+  .conn:hover { color: var(--accent); }
+  .conn .w { color: var(--dim); }
+  #loading { position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; background: var(--bg); z-index: 10;
+    transition: opacity .4s; }
+  #loading .bar { width: 260px; height: 6px; background: var(--panel2);
+    border-radius: 3px; margin-top: 12px; overflow: hidden; }
+  #loading .bar div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  #simStatus { font-size: 11px; color: var(--fire); min-height: 15px; }
+  input[type=checkbox] { accent-color: var(--accent); }
+  #modeNote { color: var(--dim); font-size: 11px; margin-top: 6px; }
+  kbd { background: var(--panel2); border: 1px solid var(--border); border-radius: 3px;
+    padding: 0 4px; font-size: 10px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="panel">
+    <h1>🪰 Fly Brain Explorer</h1>
+    <div class="sub">MaleCNS v1.0 · HHMI Janelia · CC-BY-4.0<br>
+      <span id="statLine">loading…</span><br>
+      <a href="/arena.html" target="_blank" style="color:var(--accent)">🐛 open 2D foraging arena</a></div>
+
+    <div class="sec">
+      <h2>Stimulus — what fires</h2>
+      <div class="row">
+        <select id="stimSelect" style="flex:1"></select>
+      </div>
+      <div class="row"><span class="hint" id="stimDesc"></span></div>
+      <div class="row" style="margin-top:8px">
+        <button id="fireBtn" class="primary" style="flex:1">⚡ Fire stimulus</button>
+      </div>
+      <div class="row"><span id="simStatus"></span></div>
+    </div>
+
+    <div class="sec">
+      <h2>Search neurons</h2>
+      <div class="row">
+        <input type="search" id="search" placeholder="name or type, e.g. DNp01, MBON, Or47b">
+        <button id="searchBtn">Go</button>
+      </div>
+      <div id="results"></div>
+    </div>
+
+    <div class="sec">
+      <h2>Display</h2>
+      <div class="row">
+        <input type="range" id="countRange" min="2000" max="200000" step="2000" value="60000">
+        <span class="val" id="countVal">60k</span>
+      </div>
+      <div class="row"><span class="hint"># neurons shown (soma points)</span></div>
+      <div class="row" style="margin-top:8px">
+        <select id="regionSel" style="flex:1"></select>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <label class="chk"><input type="checkbox" id="sideL" checked> L</label>
+        <label class="chk"><input type="checkbox" id="sideR" checked> R</label>
+        <label class="chk"><input type="checkbox" id="sideM" checked> M</label>
+        <span style="flex:1"></span>
+        <button id="resetBtn">Reset view</button>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <label class="chk"><input type="checkbox" id="morphChk"> Show neuron shape (skeleton) when selected</label>
+      </div>
+      <div id="modeNote">Drag = rotate · scroll = zoom · right-drag = pan · click = select</div>
+    </div>
+  </div>
+
+  <div id="viewport">
+    <canvas id="canvas3d"></canvas>
+    <div id="hud">…</div>
+    <div id="legend"></div>
+    <div id="loading">
+      <div style="font-size:16px">Loading MaleCNS v1.0 connectome…</div>
+      <div class="bar"><div id="loadBar"></div></div>
+      <div class="hint" id="loadMsg"></div>
+    </div>
+  </div>
+
+  <div id="info">Select a neuron to see details.</div>
+</div>
+
+<script src="js/three.min.js"></script>
+<script src="js/OrbitControls.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

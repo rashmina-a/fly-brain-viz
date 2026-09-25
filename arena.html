@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Fly Foraging Arena — train with GA, then experiment</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0b0e14; --panel: #131824; --panel2: #1a2130; --text: #d7dee9;
+    --dim: #8b95a7; --accent: #4fc3f7; --fire: #ff7043; --border: #232c3f;
+    --good: #81c784; --bad: #e57373;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 13px/1.45 "Segoe UI", system-ui, sans-serif; overflow: hidden; }
+  #app { display: flex; height: 100vh; }
+  #panel { width: 296px; min-width: 296px; background: var(--panel);
+    border-right: 1px solid var(--border); display: flex; flex-direction: column;
+    overflow-y: auto; }
+  #panel h1 { font-size: 15px; margin: 0; padding: 12px 14px 2px; }
+  #panel .sub { color: var(--dim); font-size: 11px; padding: 0 14px 10px;
+    border-bottom: 1px solid var(--border); }
+  .sec { padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  .sec h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .8px;
+    color: var(--dim); margin: 0 0 8px; }
+  .row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
+  .row:last-child { margin-bottom: 0; }
+  button { background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 6px 10px; cursor: pointer; font-size: 12px; }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button.primary { background: #14324a; border-color: #1f5f86; }
+  button.primary:hover { background: #17405e; }
+  button.danger { border-color: #6b2a26; }
+  button.danger:hover { color: var(--bad); border-color: var(--bad); }
+  button.active { background: #14324a; border-color: var(--accent); color: var(--accent); }
+  select { background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 4px; padding: 5px 6px; font-size: 12px; flex: 1; }
+  label.chk { display: flex; align-items: center; gap: 6px; font-size: 12px;
+    color: var(--dim); cursor: pointer; }
+  label.chk input { accent-color: var(--accent); }
+  .hint { color: var(--dim); font-size: 11px; }
+  .stat { display: flex; justify-content: space-between; font-size: 12px;
+    padding: 2px 0; }
+  .stat b { color: var(--accent); font-weight: 600; }
+  #tabs { display: flex; gap: 6px; padding: 10px 14px 0; }
+  #tabs button { flex: 1; }
+  #genChart { width: 100%; height: 70px; background: var(--panel2);
+    border-radius: 4px; margin: 4px 0 6px; }
+  #genomeBadge { font-size: 11px; padding: 4px 0; }
+  #world { flex: 1; position: relative; min-width: 120px; }
+  #arena { position: absolute; inset: 0; display: block; cursor: crosshair; }
+  #brainbox { position: absolute; right: 10px; top: 10px; width: 238px;
+    background: rgba(19,24,36,.93); border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 10px; font-size: 11px; max-height: 46%; overflow-y: auto; }
+  #brainbox h3 { margin: 0 0 6px; font-size: 12px; color: var(--accent); }
+  .layer { margin-bottom: 7px; }
+  .layer .lt { color: var(--dim); font-size: 10px; text-transform: uppercase;
+    letter-spacing: .6px; margin-bottom: 2px; }
+  .bar { height: 7px; background: var(--panel2); border-radius: 3px; overflow: hidden;
+    margin: 2px 0; }
+  .bar div { height: 100%; border-radius: 3px; }
+  .chip { display: inline-block; background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 3px; padding: 0 5px; margin: 1px 2px 1px 0; font-size: 10px; }
+  .chip.on { border-color: var(--fire); color: var(--fire); }
+  #learningBox { position: absolute; right: 10px; bottom: 10px; width: 238px;
+    background: rgba(19,24,36,.93); border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 10px; font-size: 11px; }
+  #learningBox h3 { margin: 0 0 4px; font-size: 12px; color: var(--good); }
+  #lc { width: 100%; height: 56px; }
+  #sniffBar { position: absolute; left: 10px; top: 10px; background: rgba(19,24,36,.93);
+    border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 11px;
+    width: 200px; }
+  .od { display: flex; justify-content: space-between; padding: 1px 0; }
+  #toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%);
+    background: rgba(19,24,36,.95); border: 1px solid var(--accent); color: var(--accent);
+    border-radius: 5px; padding: 6px 12px; font-size: 12px; opacity: 0;
+    transition: opacity .3s; pointer-events: none; max-width: 70%; }
+  a { color: var(--accent); }
+  input[type=range] { accent-color: var(--accent); flex: 1; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="panel">
+    <h1>🪰 Foraging Arena</h1>
+    <div class="sub">fly brain = <b>real</b> MaleCNS olfactory connectome<br>
+      <a href="/" target="_blank">↗ open 3D brain explorer</a></div>
+
+    <div id="tabs">
+      <button id="tabTrain" class="active">🧬 Train (GA)</button>
+      <button id="tabExp">🔬 Experiment</button>
+    </div>
+
+    <!-- TRAIN -->
+    <div class="sec" id="trainSec">
+      <h2>Genetic algorithm</h2>
+      <div class="row">
+        <button id="trainBtn" class="primary" style="flex:1">▶ Start training</button>
+      </div>
+      <div class="stat"><span>generation</span><b id="genVal">0</b></div>
+      <div class="stat"><span>evaluating fly</span><b id="memberVal">–/24</b></div>
+      <div class="stat"><span>best score</span><b id="bestVal">–</b></div>
+      <div class="stat"><span>avg score</span><b id="avgVal">–</b></div>
+      <div class="stat"><span>food found best/avg</span><b id="foundGenVal">–</b></div>
+      <div class="stat"><span>🌀 circling/ep best/avg</span><b id="circGenVal">–</b></div>
+      <div class="stat"><span>✅ success rate</span><b id="succVal">–</b></div>
+      <div class="stat"><span>⚡ throughput</span><b id="genRate">–</b></div>
+      <canvas id="genChart" width="266" height="70"></canvas>
+      <canvas id="succChart" width="266" height="54"></canvas>
+      <div class="row">
+        <button id="applyBtn" class="primary" style="flex:1">✅ use best genome in experiment</button>
+      </div>
+      <div class="row">
+        <button id="saveBtn">💾 save</button>
+        <button id="exportBtn">⬇ export</button>
+        <button id="importBtn">⬆ import</button>
+        <button id="resetGABtn" class="danger">↺ reset</button>
+      </div>
+      <input type="file" id="importFile" accept=".json" style="display:none">
+      <div class="hint">Episodes run headless with food placed automatically
+        (respawns when eaten) at up to 500× speed. The best genome autosaves
+        to this browser after every generation — come back anytime and your
+        trained fly will be waiting in 🔬 Experiment.</div>
+    </div>
+
+    <!-- EXPERIMENT -->
+    <div class="sec" id="expSec" style="display:none">
+      <div id="genomeBadge">fly runs the naive (hand-tuned) genome</div>
+      <div class="row">
+        <button id="loadGenBtn" style="flex:1">🧬 load trained genome</button>
+        <button id="naiveGenBtn">naive</button>
+      </div>
+
+      <h2 style="margin-top:10px">Food</h2>
+      <div class="row"><select id="odorSel"></select></div>
+      <div class="row">
+        <button id="placeBtn" class="primary" style="flex:1">📍 click arena to place food</button>
+      </div>
+      <div class="row">
+        <button id="randomBtn">🎲 Random food</button>
+        <button id="clearFoodBtn" class="danger">🗑 Clear</button>
+        <label class="chk"><input type="checkbox" id="autoFoodChk" checked> auto</label>
+      </div>
+      <div class="row hint" id="foodCount">0 food items</div>
+
+      <h2 style="margin-top:10px">Fly</h2>
+      <div class="row">
+        <button id="spawnBtn">🔁 Respawn fly</button>
+        <label class="chk"><input type="checkbox" id="showTrail" checked> trail</label>
+      </div>
+      <div class="row hint">click = place food · shift-click = move fly</div>
+
+      <h2 style="margin-top:10px">Learning (mushroom body)</h2>
+      <div class="row"><label class="chk"><input type="checkbox" id="learnChk" checked> DAN-gated KC→MBON plasticity</label></div>
+      <div class="row"><span class="hint">rate</span><input type="range" id="lrRange" min="1" max="60" value="18"><span class="hint" id="lrVal">0.018</span></div>
+      <div class="row">
+        <button id="resetBrainBtn" class="danger">↺ reset brain</button>
+        <button id="testBtn">🧪 probe</button>
+      </div>
+      <div class="stat"><span>food found</span><b id="foundCount">0</b></div>
+      <div class="stat"><span>valence (drive)</span><b id="valVal">0.00</b></div>
+      <div class="stat"><span>exploration</span><b id="modeVal">–</b></div>
+    </div>
+
+    <!-- SIM (both modes) -->
+    <div class="sec">
+      <h2>Simulation</h2>
+      <div class="row">
+        <button id="pauseBtn" class="primary">⏸ Pause</button>
+        <span class="hint">speed</span>
+        <input type="range" id="speedRange" min="0" max="8" step="1" value="0">
+        <b id="speedVal" style="color:var(--accent);min-width:34px;text-align:right">1×</b>
+      </div>
+      <div class="row hint">1× … 500× · training keeps running while you watch</div>
+    </div>
+  </div>
+
+  <div id="world">
+    <canvas id="arena"></canvas>
+
+    <div id="sniffBar">
+      <b style="color:var(--accent)">antenna</b>
+      <div id="sniffRows"></div>
+    </div>
+
+    <div id="brainbox">
+      <h3>🧠 brain (live, real neurons)</h3>
+      <div class="layer"><div class="lt">PN — antennal lobe (272)</div>
+        <div class="bar"><div id="pnBar" style="width:0;background:var(--accent)"></div></div>
+        <div id="pnChips"></div></div>
+      <div class="layer"><div class="lt">KC — Kenyon cells (4064, sparse)</div>
+        <div class="bar"><div id="kcBar" style="width:0;background:#ffd54f"></div></div>
+        <div id="kcChips"></div></div>
+      <div class="layer"><div class="lt">MBON — mushroom body output (97)</div>
+        <div class="bar"><div id="mbBar" style="width:0;background:#ba68c8"></div></div>
+        <div id="mbChips"></div></div>
+      <div class="layer"><div class="lt">DAN — dopamine (teaching)</div>
+        <div class="bar"><div id="danBar" style="width:0;background:#81c784"></div></div>
+        <div id="danChips"></div></div>
+    </div>
+
+    <div id="learningBox">
+      <h3>📈 foraging performance</h3>
+      <canvas id="lc" width="218" height="56"></canvas>
+      <div class="stat"><span>time to food (avg last 10)</span><b id="ttf">–</b></div>
+      <div class="stat"><span>trials</span><b id="trials">0</b></div>
+      <div class="stat"><span>🌀 circling events (punished)</span><b id="circCount">0</b></div>
+    </div>
+
+    <div id="toast"></div>
+  </div>
+</div>
+
+<script src="js/brain.js"></script>
+<script src="js/ga.js"></script>
+<script src="js/arena.js"></script>
+</body>
+</html>

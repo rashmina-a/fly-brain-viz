@@ -1,0 +1,8 @@
+# downloaded + generated datasets (multi-GB)
+data/*.feather
+data/*.npy
+data/*.u32
+data/*.u16
+data/skeletons/
+server.log
+__pycache__/

@@ -1,0 +1,21 @@
+{
+  "genome": {
+    "surgeGain": 0.3263493436981446,
+    "bilatGain": 20,
+    "bilatReach": 40,
+    "gradGain": 0.3600339329769755,
+    "castGain": 0.3,
+    "castFreq": 1.1749682629059246,
+    "castHold": 2.7756509278139765,
+    "wanderGain": 0.24970133928117744,
+    "wanderHold": 0.5052693065672489,
+    "surgeSpeed": 2.2,
+    "cruiseSpeed": 1.5492748615665461,
+    "odorThresh": 0.0633348476271255,
+    "valGain": 2.645394214326224,
+    "closeBias": 0.7598737734586066,
+    "turnSmooth": 0.6
+  },
+  "score": 188.5388888888889,
+  "gens": 40
+}
