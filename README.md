@@ -10,5 +10,5 @@ git clone https://github.com/rashmina-a/fly-brain-viz.git && cd fly-brain-viz &&
 You can use this command on powershell or terminal in linux or mac ,
 Here are links for the requirements that need to be installed before setup
 ## Requirements 
-[Python](https://www.python.org/downloads/)
+[Python](https://www.python.org/downloads/)\
 [git](https://git-scm.com/install/)
