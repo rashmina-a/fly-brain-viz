@@ -1,3 +1,10 @@
+# fly-brain-viz
+Explore the open source map diagram of the fly brain.
+
+<img width="1916" height="936" alt="Screenshot 2026-09-24 063508" src="https://github.com/user-attachments/assets/a63254e6-d9b1-4a12-b245-3862257a5bb8" />
+
+This is just a preview — there is much more to explore in the full app.
+
 # 🪰 Fly Brain Explorer — MaleCNS v1.0
 
 An interactive web interface for the **connectome of the adult male fruit fly
@@ -15,21 +22,26 @@ Two apps:
    generations per second**; you train first, then experiment with the
    trained fly.
 
-## Quick start
+## Installation and Setup
+
+Just clone the repo and run the server:
 
 ```bash
+git clone https://github.com/rashmina-a/fly-brain-viz.git
 cd fly-brain-viz
-python server.py            # default port 8000
+python3 server.py
 ```
 
 Open `http://127.0.0.1:8000/` (3D explorer) or
 `http://127.0.0.1:8000/arena.html` (foraging arena).
 
+You can use this command in PowerShell or a terminal on Linux/macOS.
+
 **First run only:** the server automatically downloads the raw connectome
 dataset (~1.1 GB, public GCS bucket, resumable) and builds the web-optimized
 files with `scripts/prepare_data.py` + `scripts/prepare_olfactory.py`
 (needs `pip install pandas pyarrow numpy`). Later runs start instantly.
-Use `python server.py --no-download` to serve without ever downloading.
+Use `python3 server.py --no-download` to serve without ever downloading.
 
 ## The foraging arena (train → experiment)
 
@@ -75,6 +87,11 @@ scripts/test_ga_pipeline.js  pipelined + island trainer test (node)
 data/                        downloaded + generated (see .gitignore)
 ```
 
+## Requirements
+
+- [Python](https://www.python.org/downloads/)
+- [git](https://git-scm.com/install/)
+
 ## Credits & license
 
 - Connectome data: **MaleCNS v1.0**, HHMI Janelia —
@@ -83,3 +100,4 @@ data/                        downloaded + generated (see .gitignore)
 - Skeletons proxied from the same bucket's neuroglancer precomputed volume.
 - This app is an independent visualization/teaching tool, not affiliated
   with Janelia.
+
