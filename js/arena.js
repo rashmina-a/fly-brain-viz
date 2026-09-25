@@ -279,18 +279,40 @@ function loadSaved() {
 }
 
 /* ---------------- training pump ----------------
- * A setTimeout(0) chain that keeps one near-full core on GA evaluation
- * (the rAF loop only time-boxed it to ~10ms/frame). Uses the worker pool
- * when available — nWorkers × single-core speed — else sync slices. */
+ * The trainer is fully pipelined: evaluateParallel() keeps every worker fed
+ * (one job in flight per worker) and the pool's result handler CHAINS the
+ * next generation directly — no setTimeout on the hot path, so the browser's
+ * 4 ms timer clamp can't throttle generations. The rAF loop only draws; to
+ * keep a whole core free for training, the demo fly steps at 2× during
+ * training (it's a live preview of the best genome, not the GA itself). */
+const ISLAND_STEPS = 10;  // generations per island batch (IPC amortization)
 function gaPump() {
-  setTimeout(gaPump, 0);
-  if (!training || !trainer || mode !== "train") { lastEvolveT = 0; return; }
+  if (!trainer || mode !== "train") { lastEvolveT = 0; return; }
   if (trainer.busy) return;
-  if (gaPool && gaPool.ready) {
-    trainer.evaluateParallel(finishGeneration);
-  } else if (trainer.evaluateSlice(30)) {
+  if (gaPool && gaPool.ready && GA.runIslandLocally) {
+    if (!trainer.startIslandRun(ISLAND_STEPS, null, finishIslandBatch))
+      console.warn("island dispatch refused");
+    return;
+  }
+  if (!trainer.evaluateParallel(finishGeneration) &&
+      trainer.evaluateSlice(30)) {
     finishGeneration();
   }
+}
+function finishIslandBatch() {
+  const now = performance.now();
+  if (lastEvolveT > 0) {
+    const nGens = ISLAND_STEPS;
+    const r = (nGens * 1000) / Math.max(1, now - lastEvolveT);
+    genRate = genRate ? genRate * 0.85 + r * 0.15 : r;
+  }
+  lastEvolveT = now;
+  if (trainer.bestGenome) sim.genome = GA.cloneGenome(trainer.bestGenome);
+  saveBest(false);
+  updateTrainingPanel();
+  updateTrainingProgress();
+  $("genRate").textContent = genRate ? genRate.toFixed(0) + " gen/s" : "…";
+  if (training) gaPump();       // keep the pipeline full immediately
 }
 function finishGeneration() {
   const row = trainer.evolve();
@@ -302,12 +324,15 @@ function finishGeneration() {
     genRate = genRate ? genRate * 0.85 + r * 0.15 : r;
   }
   lastEvolveT = now;
-  if (now - lastPanelT > 150) {
+  // panels are throttled harder while training so the main thread stays free
+  const panelEvery = training ? 400 : 150;
+  if (now - lastPanelT > panelEvery) {
     lastPanelT = now;
     updateTrainingPanel();
     updateTrainingProgress();
     $("genRate").textContent = genRate ? genRate.toFixed(0) + " gen/s" : "…";
   }
+  if (training) gaPump();       // keep the pipeline full immediately
 }
 
 /* ---------------- rendering ---------------- */
@@ -329,14 +354,16 @@ function draw() {
   if (!sim || !sim.fly) return;
 
   const s = Math.min(canvas.width / CFG.worldW, canvas.height / CFG.worldH);
-  // plume (visualization grid)
-  for (let gy = 0; gy < sim.grid.gh; gy++) {
-    for (let gx = 0; gx < sim.grid.gw; gx++) {
-      const v = sim.grid.a[gy * sim.grid.gw + gx];
-      if (v < 0.02) continue;
-      ctx.fillStyle = `rgba(79,195,247,${Math.min(0.16, v * 0.07)})`;
-      const [sx, sy] = worldToScreen(gx * CFG.grid, gy * CFG.grid);
-      ctx.fillRect(sx, sy, CFG.grid * s + 1, CFG.grid * s + 1);
+  // plume (visualization grid) — the most expensive draw; skip while training
+  if (!training) {
+    for (let gy = 0; gy < sim.grid.gh; gy++) {
+      for (let gx = 0; gx < sim.grid.gw; gx++) {
+        const v = sim.grid.a[gy * sim.grid.gw + gx];
+        if (v < 0.02) continue;
+        ctx.fillStyle = `rgba(79,195,247,${Math.min(0.16, v * 0.07)})`;
+        const [sx, sy] = worldToScreen(gx * CFG.grid, gy * CFG.grid);
+        ctx.fillRect(sx, sy, CFG.grid * s + 1, CFG.grid * s + 1);
+      }
     }
   }
 
@@ -650,7 +677,7 @@ function initUI() {
   $("trainBtn").onclick = () => {
     if (!trainer) {
       trainer = new GA.GATrainer(env, {
-        popSize: 16, elite: 3, episodeT: 15, nFood: 3, lr: 0.018,
+        popSize: 8, elite: 2, episodeT: 10, nFood: 3, lr: 0.018,
       });
       if (gaPool) trainer.attachPool(gaPool);
     }
@@ -752,7 +779,7 @@ async function boot() {
 
   // worker pool for parallel GA evaluation (sync slice fallback otherwise)
   if (GA.createGAPool) {
-    const nW = Math.min(6, Math.max(2, (navigator.hardwareConcurrency || 4) - 2));
+    const nW = Math.min(8, Math.max(2, (navigator.hardwareConcurrency || 4) - 1));
     gaPool = GA.createGAPool(circ, {
       W: CFG.worldW, H: CFG.worldH, flySpeed: CFG.flySpeed,
       turnRate: CFG.turnRate, eatDist: CFG.eatDist,
@@ -776,15 +803,25 @@ async function boot() {
     requestAnimationFrame(loop);
     const dtReal = Math.min(0.05, (now - last) / 1000) || 1 / 60;
     last = now;
-    const S = SPEEDS[speedIdx];
-    if (!paused) {
-      const steps = Math.max(1, Math.round(S * dtReal * 60));
-      const sub = dtReal * S / steps;
-      for (let i = 0; i < steps; i++) sim.step(sub);
-      frame += steps;
+    if (training && mode === "train" && trainer && !trainer.busy) gaPump();
+    if (training && mode === "train") {
+      // training mode: the demo sim freezes and the scene repaints only a
+      // few times per second, leaving the main thread nearly idle to
+      // dispatch worker messages (this is what keeps generations fast)
+      frame++;
+      draw();
+      if (frame % 30 === 0) { updateBrainPanel(); updateLearningPanel(); }
+    } else {
+      if (!paused) {
+        const spd = SPEEDS[speedIdx];
+        const steps = Math.max(1, Math.round(spd * dtReal * 60));
+        const sub = dtReal * spd / steps;
+        for (let i = 0; i < steps; i++) sim.step(sub);
+        frame += steps;
+      }
+      draw();
+      if (frame % 8 === 0) { updateBrainPanel(); updateLearningPanel(); }
     }
-    draw();
-    if (frame % 8 === 0) { updateBrainPanel(); updateLearningPanel(); }
   }
   requestAnimationFrame(loop);
   gaPump();

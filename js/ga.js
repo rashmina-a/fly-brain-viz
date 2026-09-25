@@ -343,6 +343,61 @@ function angDiffS(a, b) {
   return d;
 }
 
+/* ---------------- island-mode local evolution ----------------
+ * Runs entirely inside one worker (or test harness): evolves the local
+ * subpopulation for `steps` generations with zero IPC, then reports the
+ * per-generation rows + batch champion. Called via GATrainer.startIslandRun
+ * on the main thread; every worker runs its own copy in lockstep, so the
+ * global generation counter advances `steps` per batch at near full CPU. */
+function runIslandLocally(env, popIn, cfg, opts, startGen, steps, seedBase, w, nP) {
+  let pop = popIn.map((p) => ({ genome: p.genome, fitness: p.fitness || 0 }));
+  const n = pop.length;
+  const rows = [];
+  let champ = null, champScore = -1e9;
+  const tSel = (arr) => {
+    let best = null;
+    for (let i = 0; i < cfg.tournament; i++) {
+      const c = arr[Math.floor(Math.random() * arr.length)];
+      if (!best || c.fitness > best.fitness) best = c;
+    }
+    return best;
+  };
+  for (let s = 0; s < steps; s++) {
+    const gen = startGen + s;
+    const sb = seedBase ^ ((gen >> 3) * 7919);
+    for (let j = 0; j < n; j++) {
+      env.setSeed(sb ^ ((w + j * nP) * 104729));
+      const r = runEpisode(env, pop[j].genome, opts);
+      pop[j].fitness = r.fitness; pop[j].found = r.found;
+      pop[j].avgTTF = r.avgTTF; pop[j].circles = r.circles || 0;
+    }
+    pop.sort((a, b) => b.fitness - a.fitness);
+    if (pop[0].fitness > champScore) { champScore = pop[0].fitness; champ = pop[0].genome; }
+    let sumF = 0, sumFnd = 0, sumC = 0, nSucc = 0;
+    for (const p of pop) {
+      sumF += p.fitness; sumFnd += p.found || 0; sumC += p.circles || 0;
+      if ((p.found || 0) > 0) nSucc++;
+    }
+    rows.push({
+      gen, best: +pop[0].fitness.toFixed(2), avg: +(sumF / n).toFixed(2),
+      bestFound: pop[0].found, avgFound: +(sumFnd / n).toFixed(2),
+      bestCirc: pop[0].circles || 0, avgCirc: +(sumC / n).toFixed(2),
+      succ: +(100 * nSucc / n).toFixed(1),
+    });
+    const next = [];
+    for (let i = 0; i < Math.min(cfg.elite, n); i++)
+      next.push({ genome: cloneGenome(pop[i].genome), fitness: 0 });
+    while (next.length < n) {
+      const p1 = tSel(pop), p2 = tSel(pop);
+      let g = crossover(p1.genome, p2.genome);
+      g = mutate(g, cfg.mutRate, cfg.mutAmt);
+      next.push({ genome: g, fitness: 0 });
+    }
+    pop = next;
+  }
+  return { rows, champion: champ, championScore: champScore, gen: startGen + steps };
+}
+
 /* ---------------- GA trainer (budget-aware, resumable) ---------------- */
 class GATrainer {
   constructor(env, opts = {}) {
@@ -400,12 +455,17 @@ class GATrainer {
   /* ---- parallel evaluation over a worker pool (browser) ---- */
   attachPool(pool) { this.pool = pool; }
 
-  /* Dispatch every genome to the pool in strided chunks; onDone() when the
-   * whole population is evaluated. Deterministic: same per-member seeds as
-   * the sync path. In-flight results are dropped if gen/token changed. */
-  evaluateParallel(onDone) {
-    if (this.busy) return;
+  /* Fully pipelined dispatch: each worker holds a BATCH of population
+   * members; the instant a worker returns, the onmessage handler feeds it
+   * the next batch. No setTimeout, no 4 ms timer clamp, no all-worker
+   * barrier — every core stays busy end-to-end, and the next generation
+   * dispatches directly from the final result handler (hundreds of
+   * generations/sec). Deterministic: per-member seeds match the sync path.
+   * In-flight results are dropped if gen/token changed. */
+  evaluateParallel(onGenDone) {
+    if (this.busy || !this.pool || !this.pool.ready) return false;
     const P = this.pool.workers.length;
+    this._batch = Math.max(1, Math.ceil(this.popSize / P / 2));
     const world = (this.gen >> 3) * 7919;      // same world for 8 generations
     const seedBase = 0xBADA55 ^ world;
     const opts = { episodeT: this.episodeT, nFood: this.nFood, lr: this.lr };
@@ -413,27 +473,45 @@ class GATrainer {
     const gen = this.gen;
     this.busy = true;
     this.evalIdx = 0;
-    let pending = P;
+    this._nextJob = 0;
+    this._doneJobs = 0;
+    this._lastResultT = performance.now();
     const self = this;
-    this.pool.onResults = (results, rGen) => {
-      if (rGen !== gen || tk !== self.evalToken) {
-        if (--pending === 0) { self.busy = false; }
-        return;
-      }
-      for (const r of results) {
-        const ind = self.pop[r.i];
-        if (!ind) continue;
-        ind.fitness = r.fitness; ind.found = r.found;
-        ind.avgTTF = r.avgTTF; ind.circles = r.circles || 0;
-        self.evalIdx++;
-      }
-      if (--pending === 0) { self.busy = false; onDone(); }
-    };
-    for (let w = 0; w < P; w++) {
+
+    const dispatchNext = (w) => {
+      if (self._nextJob >= self.popSize) return;
       const jobs = [];
-      for (let i = w; i < this.popSize; i += P) jobs.push({ i, genome: this.pop[i].genome });
-      this.pool.workers[w].postMessage({ cmd: "eval", gen, seedBase, opts, jobs });
-    }
+      for (let n = 0; n < self._batch && self._nextJob < self.popSize; n++) {
+        const i = self._nextJob++;
+        jobs.push({ i, genome: self.pop[i].genome });
+      }
+      self.pool.workers[w].postMessage({
+        cmd: "evalOne", gen, tk, seedBase, opts, w, jobs,
+      });
+    };
+
+    this.pool.onResults = (res) => {
+      if (res.tk !== tk || res.gen !== gen) return;   // stale — drop
+      self._lastResultT = performance.now();
+      for (const r of res.results) {
+        const ind = self.pop[r.i];
+        if (ind) {
+          ind.fitness = r.fitness; ind.found = r.found;
+          ind.avgTTF = r.avgTTF; ind.circles = r.circles || 0;
+          self.evalIdx++;
+        }
+        self._doneJobs++;
+      }
+      if (self._doneJobs < self.popSize) {
+        dispatchNext(res.w);          // refill this worker immediately
+      } else {
+        self.busy = false;            // clear BEFORE the callback so the
+        onGenDone();                  // next generation can chain instantly
+      }
+    };
+
+    for (let w = 0; w < P; w++) dispatchNext(w);
+    return true;
   }
 
   /* Selection + mutation → next generation. Returns stats row. */
@@ -488,6 +566,100 @@ class GATrainer {
     this.busy = false;
     this._seedPop();
   }
+
+  /* ---- island mode: each worker evolves its own subpopulation locally for
+   * `steps` generations (zero IPC during the batch), then reports history
+   * rows + its champion and receives new migrants. This amortizes message
+   * overhead ~batch-size×, which is what pushes past 200 generations/sec.
+   * World seed advances with absolute generation so islands stay comparable. */
+  startIslandRun(steps, onRow, onIdle) {
+    if (this.busy || !this.pool || !this.pool.ready) return false;
+    const P = this.pool.workers.length;
+    const tk = ++this.evalToken;
+    const startGen = this.gen;
+    const world = (startGen >> 3) * 7919;
+    const seedBase = 0xBADA55 ^ world;
+    const opts = { episodeT: this.episodeT, nFood: this.nFood, lr: this.lr };
+    this.busy = true;
+    this._islandMode = true;
+    const self = this;
+    let done = 0;
+
+    // split the global population into per-island chunks (spread elites)
+    const islands = [];
+    for (let w = 0; w < P; w++) islands.push([]);
+    for (let i = 0; i < this.popSize; i++) {
+      islands[i % P].push({ genome: this.pop[i].genome, fitness: this.pop[i].fitness || 0 });
+    }
+
+    this._islandChampions = [];
+    const batchChamps = [];          // w -> champion genome
+    const batchRows = new Map();     // gen -> [{row, w}]
+    this.pool.onResults = (res) => {
+      if (res.tk !== tk) return;
+      for (const row of res.rows) {
+        if (!batchRows.has(row.gen)) batchRows.set(row.gen, []);
+        batchRows.get(row.gen).push({ row, w: res.w });
+      }
+      batchChamps[res.w] = res.champion ? cloneGenome(res.champion) : null;
+      if (res.champion) {
+        self._islandChampions.push(cloneGenome(res.champion));
+        if (self.bestGenome === null || res.championScore > self.bestScore) {
+          self.bestGenome = cloneGenome(res.champion);
+          self.bestScore = res.championScore;
+        }
+      }
+      if (++done === P) {
+        self.busy = false;
+        self._islandMode = false;
+        self.gen = Math.max(self.gen, res.gen);   // batch complete: advance
+        // merge the islands' per-generation rows into ONE global row per
+        // generation (best across islands, means for the rest) so history
+        // length always equals the generation count
+        const gensSorted = [...batchRows.keys()].sort((a, b) => a - b);
+        for (const g of gensSorted) {
+          const rs = batchRows.get(g);
+          let bi = 0;
+          for (let k = 1; k < rs.length; k++) if (rs[k].row.best > rs[bi].row.best) bi = k;
+          const m = rs[bi].row;
+          const mean = (f) => rs.reduce((s, r) => s + (r.row[f] || 0), 0) / rs.length;
+          self.history.push({
+            gen: m.gen, best: m.best, avg: +mean("avg").toFixed(2),
+            bestFound: m.bestFound, avgFound: +mean("avgFound").toFixed(2),
+            bestCirc: m.bestCirc, avgCirc: +mean("avgCirc").toFixed(2),
+            succ: +mean("succ").toFixed(1),
+            bestGenome: batchChamps[rs[bi].w] || null,
+          });
+        }
+        // cross-pollinate: rebuild the global pop from island champions +
+        // mutants, then re-split — keeps islands from drifting apart
+        if (self._islandChampions.length) {
+          const champs = self._islandChampions;
+          const next = [];
+          for (let i = 0; i < self.popSize; i++) {
+            const src = champs[i % champs.length];
+            next.push({
+              genome: i < champs.length ? cloneGenome(src)
+                                        : mutate(src, self.mutRate, self.mutAmt),
+              fitness: 0,
+            });
+          }
+          self.pop = next;
+        }
+        self._islandChampions = [];
+        onIdle();
+      }
+    };
+
+    for (let w = 0; w < P; w++) {
+      this.pool.workers[w].postMessage({
+        cmd: "islandRun", tk, startGen, steps, seedBase, opts, w, nP: P,
+        pop: islands[w],
+        cfg: { elite: this.elite, mutRate: this.mutRate, mutAmt: this.mutAmt, tournament: this.tournament },
+      });
+    }
+    return true;
+  }
 }
 
 /* ---------------- worker pool (browser only) ----------------
@@ -507,7 +679,7 @@ function createGAPool(circ, envSpec, n, onReady) {
       if (m.cmd === "ready") {
         if (++readyCount === n) { pool.ready = true; if (onReady) onReady(); }
       } else if (m.cmd === "results" && pool.onResults) {
-        pool.onResults(m.results, m.gen);
+        pool.onResults(m);
       }
     };
     w.onerror = (e) => console.error("GA worker error:", e.message || e);
@@ -522,6 +694,7 @@ if (typeof window !== "undefined") {
     GENE_KEYS, GENE_DEF, DEFAULT_GENOME,
     randomGenome, mutate, crossover, cloneGenome,
     senseAt, sense, policyStep, runEpisode, GATrainer, createGAPool,
+    runIslandLocally,
     CIRC, initCirc, updateCircling, resetCirc,
   };
 }

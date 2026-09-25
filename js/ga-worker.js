@@ -1,7 +1,8 @@
 /* GA worker — headless episode evaluation for the Fly Foraging Arena.
- * Runs the SAME brain.js + ga.js as the main thread; the trainer dispatches
- * strided chunks of the population here so generations evaluate in parallel
- * across cores. Deterministic: per-member seeds match the sync path exactly. */
+ * Runs the SAME brain.js + ga.js as the main thread; the trainer pipelines
+ * small BATCHES of population members per worker (the trainer immediately
+ * feeds the next batch when a result arrives), so all cores stay busy
+ * end-to-end. Deterministic: per-member seeds match the sync path exactly. */
 "use strict";
 
 importScripts("brain.js", "ga.js");
@@ -29,13 +30,16 @@ self.onmessage = (e) => {
     };
     for (const o of circ.odors) env.odorGlom[o.name] = o.glom;
     postMessage({ cmd: "ready" });
-  } else if (m.cmd === "eval") {
+  } else if (m.cmd === "evalOne") {
     const results = [];
     for (const job of m.jobs) {
       env.setSeed(m.seedBase ^ (job.i * 104729));
       const r = runEpisode(env, job.genome, m.opts);
       results.push({ i: job.i, fitness: r.fitness, found: r.found, avgTTF: r.avgTTF, circles: r.circles });
     }
-    postMessage({ cmd: "results", gen: m.gen, results });
+    postMessage({ cmd: "results", gen: m.gen, tk: m.tk, w: m.w, results });
+  } else if (m.cmd === "islandRun") {
+    const out = runIslandLocally(env, m.pop, m.cfg, m.opts, m.startGen, m.steps, m.seedBase, m.w, m.nP);
+    postMessage({ cmd: "results", tk: m.tk, w: m.w, ...out });
   }
 };
